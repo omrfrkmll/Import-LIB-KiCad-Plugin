@@ -110,37 +110,65 @@ class impartGUI(wx.Dialog):
         self.m_autoImport = wx.CheckBox(
             self.leftPanel, wx.ID_ANY, "auto import", wx.DefaultPosition, wx.DefaultSize, 0
         )
+        self.m_autoImport.SetToolTip(
+            "Automatically monitors the download folder and imports new library archives in real-time."
+        )
         fgSizer1.Add(self.m_autoImport, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
         self.m_check_autoLib = wx.CheckBox(
             self.leftPanel, wx.ID_ANY, "auto settings", wx.DefaultPosition, wx.DefaultSize, 0
+        )
+        self.m_check_autoLib.SetToolTip(
+            "Automatically registers imported symbol and footprint libraries into KiCad's library tables."
         )
         fgSizer1.Add(self.m_check_autoLib, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
         self.m_overwrite = wx.CheckBox(
             self.leftPanel, wx.ID_ANY, "overwrite lib", wx.DefaultPosition, wx.DefaultSize, 0
         )
+        self.m_overwrite.SetToolTip(
+            "Overwrites existing symbols, footprints, and 3D models if they already exist in the target library."
+        )
         fgSizer1.Add(self.m_overwrite, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
         self.m_checkBoxCompressModels = wx.CheckBox(
             self.leftPanel, wx.ID_ANY, "zip 3D", wx.DefaultPosition, wx.DefaultSize, 0
         )
+        self.m_checkBoxCompressModels.SetToolTip(
+            "Compresses 3D STEP models to .step.gz to save disk space and improve load performance."
+        )
         fgSizer1.Add(self.m_checkBoxCompressModels, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
-        # Single lib checkbox and text field grouped together so they wrap as a single unit
+        # Single lib checkbox, text field and discovery button grouped together
         single_lib_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.m_checkBoxSingleLib = wx.CheckBox(
             self.leftPanel, wx.ID_ANY, "single lib name", wx.DefaultPosition, wx.DefaultSize, 0
+        )
+        self.m_checkBoxSingleLib.SetToolTip(
+            "Merges all imported components into a single unified library instead of separate source files."
         )
         single_lib_sizer.Add(self.m_checkBoxSingleLib, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
 
         self.m_textCtrl_libname = wx.TextCtrl(
             self.leftPanel, wx.ID_ANY, wx.EmptyString, wx.DefaultPosition, wx.DefaultSize, 0
         )
-        self.m_textCtrl_libname.SetMinSize(wx.Size(130, -1))
+        self.m_textCtrl_libname.SetMinSize(wx.Size(120, -1))
         self.m_textCtrl_libname.SetHint("e.g. MyLibrary")
+        self.m_textCtrl_libname.SetToolTip(
+            "Target library name (without extension). E.g. 'ProjectLib' or 'Custom'."
+        )
         self.m_textCtrl_libname.Show(False)
         single_lib_sizer.Add(self.m_textCtrl_libname, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 2)
+
+        self.m_buttonLibSelect = wx.Button(
+            self.leftPanel, wx.ID_ANY, "📚 (0)", wx.DefaultPosition, wx.DefaultSize, 0
+        )
+        self.m_buttonLibSelect.SetMinSize(wx.Size(65, -1))
+        self.m_buttonLibSelect.SetToolTip(
+            "Click to pick from detected libraries in the active target location."
+        )
+        self.m_buttonLibSelect.Show(False)
+        single_lib_sizer.Add(self.m_buttonLibSelect, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 3)
 
         fgSizer1.Add(single_lib_sizer, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 4)
 
@@ -167,6 +195,7 @@ class impartGUI(wx.Dialog):
             wx.DefaultSize,
             wx.DIRP_DEFAULT_STYLE,
         )
+        self.m_dirPicker_sourcepath.SetToolTip("Folder containing downloaded component ZIP archives to import.")
         bSizer.Add(self.m_dirPicker_sourcepath, 0, wx.ALL | wx.EXPAND, 5)
 
         bSizer2 = wx.WrapSizer(wx.HORIZONTAL)
@@ -191,6 +220,9 @@ class impartGUI(wx.Dialog):
             wx.DefaultSize,
             0,
         )
+        self.m_checkBoxLocalLib.SetToolTip(
+            "Saves libraries inside the current KiCad project folder (${KIPRJMOD}) instead of the global library path."
+        )
         bSizer2.Add(self.m_checkBoxLocalLib, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
 
         bSizer.Add(bSizer2, 0, wx.EXPAND, 0)
@@ -203,6 +235,9 @@ class impartGUI(wx.Dialog):
             wx.DefaultPosition,
             wx.DefaultSize,
             wx.DIRP_DEFAULT_STYLE,
+        )
+        self.m_dirPicker_librarypath.SetToolTip(
+            "Global destination folder for storing KiCad libraries (${KICAD_3RD_PARTY})."
         )
         bSizer.Add(self.m_dirPicker_librarypath, 0, wx.ALL | wx.EXPAND, 5)
 
@@ -248,6 +283,7 @@ class impartGUI(wx.Dialog):
         self.m_buttonImportManual.Bind(wx.EVT_BUTTON, self.ButtomManualImport)
         self.m_textCtrl2.Bind(wx.EVT_TEXT_ENTER, self.ButtomManualImport)
         self.m_buttonToggleSearch.Bind(wx.EVT_BUTTON, self.OnToggleSearchPanel)
+        self.m_buttonLibSelect.Bind(wx.EVT_BUTTON, self.OnSelectDiscoveredLib)
         self.m_dirPicker_sourcepath.Bind(wx.EVT_DIRPICKER_CHANGED, self.DirChange)
         self.m_checkBoxLocalLib.Bind(wx.EVT_CHECKBOX, self.m_checkBoxLocalLibOnCheckBox)
         self.m_checkBoxSingleLib.Bind(wx.EVT_CHECKBOX, self.m_checkBoxSingleLibOnCheckBox)
@@ -267,6 +303,9 @@ class impartGUI(wx.Dialog):
         event.Skip()
 
     def OnToggleSearchPanel(self, event):
+        event.Skip()
+
+    def OnSelectDiscoveredLib(self, event):
         event.Skip()
 
     def DirChange(self, event):

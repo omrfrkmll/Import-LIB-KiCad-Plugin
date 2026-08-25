@@ -433,7 +433,9 @@ class ImpartFrontend(impartGUI):
         self.m_checkBoxSingleLib.SetValue(single_lib)
         self.m_textCtrl_libname.SetValue(lib_name)
         self.m_textCtrl_libname.Show(single_lib)
+        self.m_buttonLibSelect.Show(single_lib)
         self.backend.importer.lib_name = lib_name if single_lib and lib_name else None
+        self._update_library_discovery_ui(auto_set_default=not bool(lib_name))
 
         compress_models_val = self.backend.config.get_value("compress_models")
         compress_models = compress_models_val == "True"  # default False if not set
@@ -580,6 +582,7 @@ class ImpartFrontend(impartGUI):
         # Print change information
         if old_local_lib != self.backend.local_lib:
             self._print_path_change("library_mode")
+            self._update_library_discovery_ui(auto_set_default=True)
 
         event.Skip()
 
@@ -587,13 +590,15 @@ class ImpartFrontend(impartGUI):
         """Handle single library name checkbox change."""
         enabled = self.m_checkBoxSingleLib.IsChecked()
         self.m_textCtrl_libname.Show(enabled)
-        self.leftPanel.Layout()
-        self.Layout()
+        self.m_buttonLibSelect.Show(enabled)
         if enabled:
+            self._update_library_discovery_ui(auto_set_default=True)
             name = self.m_textCtrl_libname.GetValue().strip()
             self.backend.importer.lib_name = name if name else None
         else:
             self.backend.importer.lib_name = None
+        self.leftPanel.Layout()
+        self.Layout()
         event.Skip()
 
     def on_close(self, event: wx.CloseEvent) -> None:
@@ -821,7 +826,108 @@ class ImpartFrontend(impartGUI):
             self._print_path_change("source", new_src)
         if old_dest != new_dest:
             self._print_path_change("destination", new_dest)
+            self._update_library_discovery_ui(auto_set_default=False)
 
+        event.Skip()
+
+    def _scan_target_libraries(self) -> list[str]:
+        """Scan active target directory (project root or global DEST_PATH) for libraries."""
+        if self.backend.local_lib and self.kicad_project:
+            target_dir = Path(self.kicad_project)
+        else:
+            dest = self.backend.config.get_DEST_PATH()
+            target_dir = Path(dest) if dest else None
+
+        if not target_dir or not target_dir.exists() or not target_dir.is_dir():
+            return []
+
+        discovered: set[str] = set()
+        try:
+            for item in target_dir.glob("*.kicad_sym"):
+                if item.is_file() and not item.name.startswith("."):
+                    discovered.add(item.stem)
+
+            for item in target_dir.glob("*.pretty"):
+                if item.is_dir() and not item.name.startswith("."):
+                    discovered.add(item.stem)
+        except Exception as e:
+            logging.debug(f"Error scanning libraries in {target_dir}: {e}")
+
+        return sorted(list(discovered))
+
+    def _update_library_discovery_ui(self, auto_set_default: bool = False) -> None:
+        """Update library count badge and suggest smart default library name."""
+        discovered = self._scan_target_libraries()
+        count = len(discovered)
+
+        if hasattr(self, "m_buttonLibSelect"):
+            self.m_buttonLibSelect.SetLabel(f"📚 ({count})")
+            target_name = (
+                "project folder"
+                if (self.backend.local_lib and self.kicad_project)
+                else "global library folder"
+            )
+            self.m_buttonLibSelect.SetToolTip(
+                f"Found {count} library/libraries in {target_name}.\nClick to pick one."
+            )
+
+        # Smart defaulting when single lib mode is active
+        if auto_set_default and hasattr(self, "m_textCtrl_libname"):
+            current_val = self.m_textCtrl_libname.GetValue().strip()
+
+            if self.backend.local_lib and self.kicad_project:
+                proj_name = Path(self.kicad_project).name
+                if count == 1:
+                    # Exactly one existing project library -> select it
+                    self.m_textCtrl_libname.SetValue(discovered[0])
+                elif not current_val or current_val not in discovered:
+                    # No libraries or old stale name -> suggest project name
+                    self.m_textCtrl_libname.SetValue(proj_name)
+            elif not self.backend.local_lib:
+                if not current_val and count > 0:
+                    self.m_textCtrl_libname.SetValue(discovered[0])
+
+    def _set_lib_name(self, name: str) -> None:
+        """Set the library name from dropdown selection and save settings."""
+        self.m_textCtrl_libname.SetValue(name)
+        self._update_backend_settings()
+        self.backend.print_to_buffer(f"Selected target library: '{name}'")
+
+    def OnSelectDiscoveredLib(self, event: wx.CommandEvent) -> None:
+        """Show a popup menu listing all detected libraries in the current target path."""
+        discovered = self._scan_target_libraries()
+        menu = wx.Menu()
+
+        if discovered:
+            for lib_name in discovered:
+                item = menu.Append(wx.ID_ANY, f"📚 {lib_name}")
+                self.Bind(
+                    wx.EVT_MENU,
+                    lambda _, name=lib_name: self._set_lib_name(name),
+                    item,
+                )
+
+            menu.AppendSeparator()
+            if self.backend.local_lib and self.kicad_project:
+                proj_name = Path(self.kicad_project).name
+                item_proj = menu.Append(wx.ID_ANY, f"✨ Use project name ({proj_name})")
+                self.Bind(wx.EVT_MENU, lambda _: self._set_lib_name(proj_name), item_proj)
+        else:
+            item_none = menu.Append(wx.ID_ANY, "(No existing libraries found)")
+            item_none.Enable(False)
+
+            if self.backend.local_lib and self.kicad_project:
+                menu.AppendSeparator()
+                proj_name = Path(self.kicad_project).name
+                item_proj = menu.Append(
+                    wx.ID_ANY, f"✨ Set as project name ({proj_name})"
+                )
+                self.Bind(wx.EVT_MENU, lambda _: self._set_lib_name(proj_name), item_proj)
+
+        pos = self.m_buttonLibSelect.GetPosition()
+        size = self.m_buttonLibSelect.GetSize()
+        self.leftPanel.PopupMenu(menu, wx.Point(pos.x, pos.y + size.height))
+        menu.Destroy()
         event.Skip()
 
     def _on_search_component_selected(self, lcsc: str) -> None:
