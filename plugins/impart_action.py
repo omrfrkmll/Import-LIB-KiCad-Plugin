@@ -433,7 +433,6 @@ class ImpartFrontend(impartGUI):
         self.m_checkBoxSingleLib.SetValue(single_lib)
         self.m_textCtrl_libname.SetValue(lib_name)
         self.m_textCtrl_libname.Show(single_lib)
-        self.Layout()
         self.backend.importer.lib_name = lib_name if single_lib and lib_name else None
 
         compress_models_val = self.backend.config.get_value("compress_models")
@@ -441,10 +440,45 @@ class ImpartFrontend(impartGUI):
         self.m_checkBoxCompressModels.SetValue(compress_models)
         self.backend.compress_models = compress_models
 
+        # Embed Component Search Panel on the right side
+        try:
+            from .component_search import SearchPanel
+        except ImportError:
+            from component_search import SearchPanel  # type: ignore[import-not-found,no-redef]
+
+        self.search_panel = SearchPanel(
+            self.rightPanel,
+            on_select=self._on_search_component_selected,
+            on_import=self._on_search_component_import,
+        )
+        self.rightSizer.Add(self.search_panel, 1, wx.EXPAND)
+
+        # Read saved search panel visibility from config (default: False)
+        show_search_panel_cfg = self.backend.config.get_value("show_search_panel")
+        self.search_panel_visible = show_search_panel_cfg == "True"
+        self._update_search_panel_visibility(initial=True)
+
         self._update_button_label()
         # Add drag & drop support
         self._setup_drag_drop()
         self._add_drag_drop_hint()
+
+        # Perform comprehensive layout update
+        self.leftPanel.Layout()
+        self.rightPanel.Layout()
+        self.splitter.UpdateSize()
+        self.Layout()
+        wx.CallAfter(self._initial_layout_refresh)
+
+    def _initial_layout_refresh(self) -> None:
+        """Ensure all nested sizers and controls are refreshed after initial window display."""
+        try:
+            self.leftPanel.Layout()
+            self.rightPanel.Layout()
+            self.splitter.UpdateSize()
+            self.Layout()
+        except Exception:
+            pass
 
     def _setup_events(self) -> None:
         """Setup event handlers."""
@@ -553,6 +587,7 @@ class ImpartFrontend(impartGUI):
         """Handle single library name checkbox change."""
         enabled = self.m_checkBoxSingleLib.IsChecked()
         self.m_textCtrl_libname.Show(enabled)
+        self.leftPanel.Layout()
         self.Layout()
         if enabled:
             name = self.m_textCtrl_libname.GetValue().strip()
@@ -789,20 +824,69 @@ class ImpartFrontend(impartGUI):
 
         event.Skip()
 
-    def OnComponentSearch(self, event: wx.CommandEvent) -> None:
-        """Open the component search dialog and fill the LCSC field on selection."""
+    def _on_search_component_selected(self, lcsc: str) -> None:
+        """Update LCSC input field when a component is clicked in the search panel."""
+        self.m_textCtrl2.SetValue(lcsc)
+
+    def _on_search_component_import(self, lcsc: str) -> None:
+        """Trigger immediate 1-click import for the selected component."""
+        self.m_textCtrl2.SetValue(lcsc)
+        self._update_backend_settings()
         try:
-            from .component_search import SearchDialog
-        except ImportError:
-            from component_search import SearchDialog  # type: ignore[import-not-found,no-redef]
+            self.backend.print_to_buffer(f"\n[1-Click Import] Starting import for {lcsc}...")
+            self._perform_easyeda_import()
+        except Exception as e:
+            error_msg = f"Error: {e}\nPython version: {sys.version}"
+            self.backend.print_to_buffer(error_msg)
+            logging.exception(f"1-click import failed for {lcsc}")
+        self._check_and_show_library_warnings()
 
-        def _live_update(lcsc: str) -> None:
-            self.m_textCtrl2.SetValue(lcsc)
+    def _update_search_panel_visibility(self, initial: bool = False) -> None:
+        """Toggle or set the visibility of the search panel in the splitter."""
+        if self.search_panel_visible:
+            if not self.splitter.IsSplit():
+                self.splitter.SplitVertically(self.leftPanel, self.rightPanel, sashPosition=520)
+            self.m_buttonToggleSearch.SetLabel("🔍 Search ◀")
+            self.m_buttonToggleSearch.SetToolTip("Hide component search panel")
+            current_w, current_h = self.GetSize().Get()
+            if current_w < 1100:
+                self.SetSize(wx.Size(1200, max(current_h, 700)))
+        else:
+            if self.splitter.IsSplit():
+                self.splitter.Unsplit(self.rightPanel)
+            self.m_buttonToggleSearch.SetLabel("🔍 Search ▶")
+            self.m_buttonToggleSearch.SetToolTip("Show component search panel")
+            current_w, current_h = self.GetSize().Get()
+            if current_w > 800:
+                self.SetSize(wx.Size(650, max(current_h, 680)))
 
-        dlg = SearchDialog(self, on_select=_live_update)
-        dlg.ShowModal()
-        dlg.Destroy()
+        self.leftPanel.Layout()
+        self.rightPanel.Layout()
+        self.splitter.UpdateSize()
+        self.Layout()
+        if not initial:
+            self.Centre(wx.BOTH)
+
+    def OnToggleSearchPanel(self, event: wx.CommandEvent) -> None:
+        """Toggle the visibility of the right search panel and save preference."""
+        self.search_panel_visible = not self.search_panel_visible
+        self.backend.config.set_value("show_search_panel", str(self.search_panel_visible))
+        self._update_search_panel_visibility()
+        if (
+            self.search_panel_visible
+            and hasattr(self, "search_panel")
+            and hasattr(self.search_panel, "search_ctrl")
+        ):
+            self.search_panel.search_ctrl.SetFocus()
         event.Skip()
+
+    def OnComponentSearch(self, event: wx.CommandEvent) -> None:
+        """Toggle or focus search panel when search event is triggered."""
+        if not self.search_panel_visible:
+            self.OnToggleSearchPanel(event)
+        elif hasattr(self, "search_panel") and hasattr(self.search_panel, "search_ctrl"):
+            self.search_panel.search_ctrl.SetFocus()
+            event.Skip()
 
     def ButtomManualImport(self, event: wx.CommandEvent) -> None:
         """Handle manual EasyEDA import."""
