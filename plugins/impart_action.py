@@ -1066,9 +1066,10 @@ class ImpartFrontend(impartGUI):
             path_variable = "${KICAD_3RD_PARTY}"
             base_folder = Path(self.backend.config.get_DEST_PATH())
 
+        target_lib_name = self.backend.importer.lib_name or "EasyEDA"
         config = ImportConfig(
             base_folder=Path(base_folder),
-            lib_name=self.backend.importer.lib_name or "EasyEDA",
+            lib_name=target_lib_name,
             overwrite=self.m_overwrite.IsChecked(),
             lib_var=path_variable,
             compress_models=self.m_checkBoxCompressModels.IsChecked(),
