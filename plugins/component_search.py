@@ -479,19 +479,20 @@ class SearchPanel(wx.Panel):  # type: ignore[misc]
         root = wx.BoxSizer(wx.VERTICAL)
 
         # ---- search row ----
-        search_row = wx.BoxSizer(wx.HORIZONTAL)
+        search_row = wx.WrapSizer(wx.HORIZONTAL)
         self.search_ctrl = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
         self.search_ctrl.SetHint("Search JLCPCB / EasyEDA …")
+        self.search_ctrl.SetMinSize(wx.Size(160, -1))
         self.btn_search = wx.Button(self, label="Search")
         self.btn_filter = wx.Button(self, label="Filter")
-        self.btn_import = wx.Button(self, label="Import")
+        self.btn_import = wx.Button(self, label="📥 Import to KiCad")
         self.btn_import.SetToolTip("Import the selected component (or double-click a row)")
         self.btn_import.Disable()
         self.btn_import.Show(self._on_import_cb is not None)
-        search_row.Add(self.search_ctrl, 1, wx.EXPAND | wx.RIGHT, 4)
-        search_row.Add(self.btn_search, 0, wx.RIGHT, 4)
-        search_row.Add(self.btn_filter, 0, wx.RIGHT, 4)
-        search_row.Add(self.btn_import, 0)
+        search_row.Add(self.search_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT | wx.BOTTOM, 4)
+        search_row.Add(self.btn_search, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT | wx.BOTTOM, 4)
+        search_row.Add(self.btn_filter, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT | wx.BOTTOM, 4)
+        search_row.Add(self.btn_import, 0, wx.ALIGN_CENTER_VERTICAL | wx.BOTTOM, 4)
         root.Add(search_row, 0, wx.EXPAND | wx.ALL, 6)
 
         # ---- splitter: result list (top) / detail panel (bottom) ----

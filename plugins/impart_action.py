@@ -17,7 +17,8 @@ from time import sleep
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from .component_search import SearchDialog
+    from .component_search import SearchDialog, SearchPanel
+    from .impart_gui import impartGUI
 
 # Setup paths for local imports
 script_dir = Path(__file__).resolve().parent
@@ -354,7 +355,7 @@ instance_manager = SingleInstanceManager()  # Create global instance manager
 atexit.register(instance_manager.stop_server)
 
 
-class ImpartFrontend(impartGUI):
+class ImpartFrontend(impartGUI):  # type: ignore[misc]
     """
     Frontend GUI supporting both IPC singleton and fallback modes.
 
@@ -395,6 +396,10 @@ class ImpartFrontend(impartGUI):
         self.backend = create_backend_handler()
         self.thread: PluginThread | None = None
         self.search_dialog: SearchDialog | None = None
+        self.search_panel: SearchPanel | None = None
+        self.search_panel_visible: bool = (
+            str(self.backend.config.get_value("show_search_panel", "False")).lower() in ("true", "1")
+        )
 
         self._setup_gui()
         self._setup_events()
@@ -426,6 +431,7 @@ class ImpartFrontend(impartGUI):
         self.m_checkBoxSingleLib.SetValue(single_lib)
         self.m_textCtrl_libname.SetValue(lib_name)
         self.m_textCtrl_libname.Show(single_lib)
+        self.m_buttonLibSelect.Show(single_lib)
         self.Layout()
         self.backend.importer.lib_name = lib_name if single_lib and lib_name else None
 
@@ -433,6 +439,25 @@ class ImpartFrontend(impartGUI):
         compress_models = compress_models_val == "True"  # default False if not set
         self.m_checkBoxCompressModels.SetValue(compress_models)
         self.backend.compress_models = compress_models
+
+        # Embedded SearchPanel setup
+        try:
+            from .component_search import SearchPanel
+        except ImportError:
+            from component_search import (  # type: ignore[import-not-found,no-redef]
+                SearchPanel,
+            )
+
+        self.search_panel = SearchPanel(
+            self.rightPanel,
+            on_select=self._on_search_component_selected,
+            on_import=self._on_search_component_import,
+        )
+        self.rightSizer.Add(self.search_panel, 1, wx.EXPAND | wx.ALL, 0)
+        self.rightPanel.Layout()
+
+        self._update_search_panel_visibility(initial=True)
+        self._update_library_discovery_ui(auto_set_default=True)
 
         self._update_button_label()
         # Add drag & drop support
@@ -476,6 +501,7 @@ class ImpartFrontend(impartGUI):
         for zip_file in zip_files:
             self.backend._import_single_file(zip_file)
 
+        self._update_library_discovery_ui()
         # Check library settings after import
         self._check_and_show_library_warnings()
 
@@ -537,6 +563,7 @@ class ImpartFrontend(impartGUI):
         self.backend.print_to_buffer(f"KiCad Project (selected manually): {path}")
         if not any(Path(path).glob("*.kicad_pro")):
             self.backend.print_to_buffer("Warning: No .kicad_pro file found in this folder.")
+        self._update_library_discovery_ui(auto_set_default=True)
 
     def _ask_project_dir(self) -> None:
         """Ask for the project folder when KiCad did not report one."""
@@ -603,6 +630,8 @@ class ImpartFrontend(impartGUI):
         else:
             self._update_library_picker()
 
+        self._update_library_discovery_ui(auto_set_default=True)
+
         # Print change information
         if old_local_lib != self.backend.local_lib:
             self._print_path_change("library_mode")
@@ -613,8 +642,10 @@ class ImpartFrontend(impartGUI):
         """Handle single library name checkbox change."""
         enabled = self.m_checkBoxSingleLib.IsChecked()
         self.m_textCtrl_libname.Show(enabled)
+        self.m_buttonLibSelect.Show(enabled)
         self.Layout()
         if enabled:
+            self._update_library_discovery_ui(auto_set_default=True)
             name = self.m_textCtrl_libname.GetValue().strip()
             self.backend.importer.lib_name = name if name else None
         else:
@@ -742,6 +773,7 @@ class ImpartFrontend(impartGUI):
         self.backend.config.set_value(
             "compress_models", str(self.m_checkBoxCompressModels.IsChecked())
         )
+        self.backend.config.set_value("show_search_panel", str(self.search_panel_visible))
 
     def BottonClick(self, event: wx.CommandEvent) -> None:
         """Handle main button click."""
@@ -841,27 +873,16 @@ class ImpartFrontend(impartGUI):
             self.backend.folder_handler.known_files = set()
             self._print_path_change("destination", new_dest)
 
+        self._update_library_discovery_ui()
         event.Skip()
 
     def OnComponentSearch(self, event: wx.CommandEvent) -> None:
-        """Open component search and import its confirmed selection."""
-        if self.search_dialog is None:
-            try:
-                from .component_search import SearchDialog
-            except ImportError:
-                from component_search import (  # type: ignore[import-not-found,no-redef]
-                    SearchDialog,
-                )
-
-            # Preserve search results when the dialog is reopened.
-            self.search_dialog = SearchDialog(self, on_select=self.m_textCtrl2.SetValue)
-
-        if self.search_dialog.ShowModal() == wx.ID_OK:
-            lcsc = self.search_dialog.get_lcsc()
-            if lcsc:
-                self.m_textCtrl2.SetValue(lcsc)
-                self._import_easyeda()
-        event.Skip()
+        """Toggle or focus search panel when search event is triggered."""
+        if not self.search_panel_visible:
+            self.OnToggleSearchPanel(event)
+        elif hasattr(self, "search_panel") and hasattr(self.search_panel, "search_ctrl"):
+            self.search_panel.search_ctrl.SetFocus()
+            event.Skip()
 
     def ButtomManualImport(self, event: wx.CommandEvent) -> None:
         """Handle manual EasyEDA import."""
@@ -924,6 +945,7 @@ class ImpartFrontend(impartGUI):
             )
             self.backend.print_to_buffer("")
             logging.info(f"Successfully imported EasyEDA component {component_id}")
+            self._update_library_discovery_ui()
 
         except ValueError as e:
             error_msg = f"Invalid component ID {component_id}: {e}"
@@ -940,6 +962,160 @@ class ImpartFrontend(impartGUI):
             self.backend.print_to_buffer(error_msg)
             logging.exception(f"Unexpected error importing {component_id}")
             wx.MessageBox(error_msg, "Unexpected Error", wx.OK | wx.ICON_ERROR)
+
+    # ------------------------------------------------------------------
+    # Library Auto-Discovery
+    # ------------------------------------------------------------------
+
+    def _scan_target_libraries(self) -> list[str]:
+        """Scan active target directory (project root or global DEST_PATH) for libraries."""
+        if self.backend.local_lib and self.kicad_project:
+            target_dir = Path(self.kicad_project)
+        else:
+            dest = self.backend.config.get_DEST_PATH()
+            target_dir = Path(dest) if dest else None
+
+        if not target_dir or not target_dir.exists() or not target_dir.is_dir():
+            return []
+
+        discovered: set[str] = set()
+        try:
+            for item in target_dir.glob("*.kicad_sym"):
+                if item.is_file() and not item.name.startswith("."):
+                    discovered.add(item.stem)
+
+            for item in target_dir.glob("*.pretty"):
+                if item.is_dir() and not item.name.startswith("."):
+                    discovered.add(item.stem)
+        except Exception as e:
+            logging.debug(f"Error scanning libraries in {target_dir}: {e}")
+
+        return sorted(list(discovered))
+
+    def _update_library_discovery_ui(self, auto_set_default: bool = False) -> None:
+        """Update library count badge and suggest smart default library name."""
+        discovered = self._scan_target_libraries()
+        count = len(discovered)
+
+        if hasattr(self, "m_buttonLibSelect"):
+            self.m_buttonLibSelect.SetLabel(f"📚 ({count})")
+            target_name = (
+                "project folder"
+                if (self.backend.local_lib and self.kicad_project)
+                else "global library folder"
+            )
+            self.m_buttonLibSelect.SetToolTip(
+                f"Found {count} library/libraries in {target_name}.\nClick to pick one."
+            )
+
+        if auto_set_default and hasattr(self, "m_textCtrl_libname"):
+            current_val = self.m_textCtrl_libname.GetValue().strip()
+
+            if self.backend.local_lib and self.kicad_project:
+                proj_name = Path(self.kicad_project).name
+                if count == 1:
+                    self.m_textCtrl_libname.SetValue(discovered[0])
+                elif not current_val or current_val not in discovered:
+                    self.m_textCtrl_libname.SetValue(proj_name)
+            elif not self.backend.local_lib:
+                if not current_val and count > 0:
+                    self.m_textCtrl_libname.SetValue(discovered[0])
+
+    def _set_lib_name(self, name: str) -> None:
+        """Set the library name from dropdown selection and save settings."""
+        self.m_textCtrl_libname.SetValue(name)
+        self._update_backend_settings()
+        self.backend.print_to_buffer(f"Selected target library: '{name}'")
+
+    def OnSelectDiscoveredLib(self, event: wx.CommandEvent) -> None:
+        """Show a popup menu listing all detected libraries in the current target path."""
+        discovered = self._scan_target_libraries()
+        menu = wx.Menu()
+
+        if discovered:
+            for lib_name in discovered:
+                item = menu.Append(wx.ID_ANY, f"📚 {lib_name}")
+                self.Bind(
+                    wx.EVT_MENU,
+                    lambda _, name=lib_name: self._set_lib_name(name),
+                    item,
+                )
+
+            menu.AppendSeparator()
+            if self.backend.local_lib and self.kicad_project:
+                proj_name = Path(self.kicad_project).name
+                item_proj = menu.Append(wx.ID_ANY, f"✨ Use project name ({proj_name})")
+                self.Bind(wx.EVT_MENU, lambda _: self._set_lib_name(proj_name), item_proj)
+        else:
+            item_none = menu.Append(wx.ID_ANY, "(No existing libraries found)")
+            item_none.Enable(False)
+
+            if self.backend.local_lib and self.kicad_project:
+                menu.AppendSeparator()
+                proj_name = Path(self.kicad_project).name
+                item_proj = menu.Append(
+                    wx.ID_ANY, f"✨ Set as project name ({proj_name})"
+                )
+                self.Bind(wx.EVT_MENU, lambda _: self._set_lib_name(proj_name), item_proj)
+
+        pos = self.m_buttonLibSelect.GetPosition()
+        size = self.m_buttonLibSelect.GetSize()
+        self.leftPanel.PopupMenu(menu, wx.Point(pos.x, pos.y + size.height))
+        menu.Destroy()
+        event.Skip()
+
+    # ------------------------------------------------------------------
+    # Embedded Search Panel Integration
+    # ------------------------------------------------------------------
+
+    def _on_search_component_selected(self, lcsc: str) -> None:
+        """Update LCSC input field when a component is clicked in the search panel."""
+        self.m_textCtrl2.SetValue(lcsc)
+
+    def _on_search_component_import(self, lcsc: str) -> None:
+        """Trigger immediate 1-click import for the selected component."""
+        self.m_textCtrl2.SetValue(lcsc)
+        self.backend.print_to_buffer(f"\n[1-Click Import] Starting import for {lcsc}...")
+        self._import_easyeda()
+
+    def _update_search_panel_visibility(self, initial: bool = False) -> None:
+        """Toggle or set the visibility of the search panel in the splitter."""
+        if self.search_panel_visible:
+            if not self.splitter.IsSplit():
+                self.splitter.SplitVertically(self.leftPanel, self.rightPanel, sashPosition=520)
+            self.m_buttonToggleSearch.SetLabel("🔍 Search ◀")
+            self.m_buttonToggleSearch.SetToolTip("Hide component search panel")
+            current_w, current_h = self.GetSize().Get()
+            if current_w < 1100:
+                self.SetSize(wx.Size(1200, max(current_h, 700)))
+        else:
+            if self.splitter.IsSplit():
+                self.splitter.Unsplit(self.rightPanel)
+            self.m_buttonToggleSearch.SetLabel("🔍 Search ▶")
+            self.m_buttonToggleSearch.SetToolTip("Show component search panel")
+            current_w, current_h = self.GetSize().Get()
+            if current_w > 800:
+                self.SetSize(wx.Size(650, max(current_h, 680)))
+
+        self.leftPanel.Layout()
+        self.rightPanel.Layout()
+        self.splitter.UpdateSize()
+        self.Layout()
+        if not initial:
+            self.Centre(wx.BOTH)
+
+    def OnToggleSearchPanel(self, event: wx.CommandEvent) -> None:
+        """Toggle the visibility of the right search panel and save preference."""
+        self.search_panel_visible = not self.search_panel_visible
+        self.backend.config.set_value("show_search_panel", str(self.search_panel_visible))
+        self._update_search_panel_visibility()
+        if (
+            self.search_panel_visible
+            and hasattr(self, "search_panel")
+            and hasattr(self.search_panel, "search_ctrl")
+        ):
+            self.search_panel.search_ctrl.SetFocus()
+        event.Skip()
 
 
 def create_backend_handler() -> ImpartBackend:
